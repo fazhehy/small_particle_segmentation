@@ -11,7 +11,7 @@ sock_path = sys.argv[1]
 # 连接到主进程
 client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
 client.connect(sock_path)
-print("[Worker] Connected to main process!\n")
+# print("[Worker] Connected to main process!\n")
 
 def receive_frame(conn):
     """
@@ -81,39 +81,71 @@ result = receive_frame(client)
 if result is not None:
     frame_id, video_name, timestamp, frame = result
 
-    mtx_list = [[9.60453773e+03, 0.00000000e+00, 3.65737090e+02],
-                [0.00000000e+00, 1.12438623e+04, 4.98145935e+02],
+    mtx_list = [[1.05876767e+04, 0.00000000e+00, 6.15380489e+02],
+                [0.00000000e+00, 1.05010530e+04, 6.02294987e+02],
                 [0.00000000e+00, 0.00000000e+00, 1.00000000e+00]]
     mtx = np.array(mtx_list)
-    dist_list = [[2.06119209, 11.35484858, 0.2085654, -0.055126, 0.15207686]]
+
+    dist_list = [[3.57574264e+00, -2.32625060e+02, -1.02493108e-02, -8.41709324e-02, 7.95046489e+03]]
     dist = np.array(dist_list)
 
-    model = VideoParticleSegmentor(0.05783362939758736)
-    # print(video_name)
-    # print(timestamp)
-    # cv2.imshow('img', frame)
-    # cv2.waitKey(0)
     img = frame
     img_copy = img.copy()
-    newcameramtx, roi = cv2.getOptimalNewCameraMatrix(
-                mtx, dist, (img.shape[1], img.shape[0]), 0,
-                (img.shape[1], img.shape[0]))
+    newcameramtx, roi = cv2.getOptimalNewCameraMatrix(mtx, dist, (img.shape[1], img.shape[0]), 0, (img.shape[1], img.shape[0]))
     img = cv2.undistort(img, mtx, dist, None, newcameramtx)
 
     # enhance the contrast
-    img = cv2.convertScaleAbs(img, alpha=8, beta=0)
+    img = cv2.convertScaleAbs(img, alpha=3, beta=0)
+
+    # 1) 去噪（可选）
+    denoise = cv2.medianBlur(img, 3)
+    # 2) 黑电平压零：三个通道都很低才认为是背景
+    thr = 18  # 可调：10~30
+    mask_bg = np.all(denoise < thr, axis=2)   # True 表示接近黑背景
+    out = denoise.copy()
+    out[mask_bg] = [0, 0, 0]
+    img = out
+    # 1) 轻微去噪（可选）
+    img_blur = cv2.medianBlur(img, 3)
+    img_blur = cv2.cvtColor(img_blur, cv2.COLOR_BGR2GRAY)
+    # 2) 提取灰块（阈值可调）
+    # 只要亮度 > thr 就当作“非纯黑”
+    thr = 20
+    _, mask = cv2.threshold(img_blur, thr, 255, cv2.THRESH_BINARY)
+    # 3) 连通域过滤：删除小面积灰块
+    num, labels, stats, _ = cv2.connectedComponentsWithStats(mask, connectivity=8)
+    clean_mask = np.zeros_like(mask)
+    min_area = 80   # 关键参数：越大删得越狠
+    for i in range(1, num):  # 0是背景
+        area = stats[i, cv2.CC_STAT_AREA]
+        if area >= min_area:
+            clean_mask[labels == i] = 255
+    # 4) 应用掩膜
+    out = np.zeros_like(img)
+    out[clean_mask == 255] = img[clean_mask == 255]
+    # cv2.imshow('preprocessed', out)
+    # cv2.waitKey(0)
+
+    # cv2.imshow('undistorted', img)
+    # cv2.waitKey(0)
+    img = out
     # resize 
     img = cv2.resize(img, (int(img.shape[1]*0.5), int(img.shape[0]*0.5)), interpolation=cv2.INTER_AREA)
+
+    model = VideoParticleSegmentor()
+
     print(time.strftime("%H:%M:%S"))
     start = time.time()
     model.segment(img)
-    model.staistic()
+    model.statistic()
     model.save_result(video_name, timestamp, frame_id, img_copy)
     end = time.time()
     print(time.strftime("%H:%M:%S"))
+    
     delta_time = end-start
     print(f'delta time:{int(delta_time/60)}min {delta_time%60}s')
+
     send_result(client, frame_id, 'ok')
 
 client.close()
-print("[Worker] Disconnected")
+# print("[Worker] Disconnected")

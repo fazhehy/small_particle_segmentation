@@ -8,13 +8,6 @@ import time
 import psutil
 import cv2
 
-mtx_list = [[1.35570138e+04, 0.00000000e+00, 1.30343234e+03],
-             [0.00000000e+00, 1.42002596e+04, 1.55487865e+03],
-             [0.00000000e+00, 0.00000000e+00, 1.00000000e+00]]
-mtx = np.array(mtx_list)
-dist_list = [[-2.66033871e+00, 3.24535255e+02, 1.12022732e-01,-3.05400650e-02, -1.12367025e+04]]
-dist = np.array(dist_list)
-
 def print_memory_usage():
     """打印当前内存使用"""
     process = psutil.Process(os.getpid())
@@ -44,9 +37,9 @@ def start_worker():
         # stderr=subprocess.PIPE
     )
     # 等待连接
-    print("Waiting for worker connection...")
+    # print("Waiting for worker connection...")
     conn, _ = server.accept()
-    print("Worker connected!")
+    # print("Worker connected!")
 
 def send_frame(conn, frame, frame_id, path_str, timestamp_str):
     """
@@ -101,16 +94,18 @@ def receive_result(conn):
     return frame_id, result_data.decode()
 
 def stop_worker():
-    conn.close()
+    conn.close()  
     worker.wait()
     server.close()
     if os.path.exists(sock_path):
         os.remove(sock_path)
 
 def main():
-    timestamp = time.strftime("%m-%d_%H-%M-%S")
-    video_path = './data/10-23-1/Video_20251023204014025.mp4'
+    timestamp = time.strftime("%m.%d-%H:%M:%S")
+    video_path = './data/3.23-3/Video_20260323150428437.mp4'
     video_name = os.path.basename(os.path.dirname(video_path))
+
+    os.makedirs('./data/'+video_name +'/frames', exist_ok=True)
 
     video = cv2.VideoCapture(video_path)
     if not video.isOpened():
@@ -125,20 +120,32 @@ def main():
             print("视频读取完成")
             break
         id += 1
-        if id % 2 == 0:
+        if id % 3 == 0 and id > 3879:
             gray_keyframe = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
             min_val, _, _, _ = cv2.minMaxLoc(gray_keyframe)
+
+            # cv2.imshow('keyframe', gray_keyframe)
+            
+            # print(f'Frame ID: {id}, Min Pixel Value: {min_val}')
+
+            # if cv2.waitKey(33) & 0xFF == ord('q'):
+            #     break
+            
+            # cv2.imwrite(f'./data/{video_name}/frames/{id}.jpg', frame)
+
+            # continue
+
             if min_val <= 10:
                 n += 1
                 print(f'======== start {n} ========')
-                print_memory_usage()
+                # print_memory_usage()
                 start_worker()
                 send_frame(conn, frame, id, video_name, timestamp)
                 result = None
                 while(result != 'ok'):
                     _, result = receive_result(conn)
                 stop_worker()
-                print_memory_usage()
+                # print_memory_usage()
                 print(f'========= end {n} =========\n')
 
 if __name__ == '__main__':
