@@ -4,32 +4,15 @@ import numpy as np
 import struct
 import time
 import cv2
-from sam import VideoParticleSegmentor
+
+from sam import SAM
 
 sock_path = sys.argv[1]
 
-# 连接到主进程
 client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
 client.connect(sock_path)
-# print("[Worker] Connected to main process!\n")
 
 def receive_frame(conn):
-    """
-    接收视频帧和附加信息（路径和时间戳）。
-    
-    协议格式：
-    - 4 bytes: frame_id (uint32)
-    - 4 bytes: height (uint32)
-    - 4 bytes: width (uint32)
-    - 4 bytes: channels (uint32)
-    - 4 bytes: data_size (uint32)
-    - 4 bytes: path_len (uint32)
-    - 4 bytes: timestamp_len (uint32)
-    - path_len bytes: path string (utf-8)
-    - timestamp_len bytes: timestamp string (utf-8)
-    - data_size bytes: frame data
-    """
-    # 先接收固定长度的7个 uint32 元数据，共 7*4 = 28 字节
     header = b''
     while len(header) < 28:
         chunk = conn.recv(28 - len(header))
@@ -71,7 +54,6 @@ def receive_frame(conn):
     return frame_id, path_str, timestamp_str, frame
 
 def send_result(conn, frame_id, message):
-    """发送处理结果"""
     data = message.encode()
     header = struct.pack('2I', frame_id, len(data))
     conn.sendall(header)
@@ -81,25 +63,31 @@ result = receive_frame(client)
 if result is not None:
     frame_id, video_name, timestamp, frame = result
 
-    mtx_list = [[1.05876767e+04, 0.00000000e+00, 6.15380489e+02],
-                [0.00000000e+00, 1.05010530e+04, 6.02294987e+02],
-                [0.00000000e+00, 0.00000000e+00, 1.00000000e+00]]
-    mtx = np.array(mtx_list)
+    calib_file = './calibration/results/mindvision/calibration_result.yml'
+    fs = cv2.FileStorage(calib_file, cv2.FILE_STORAGE_READ)
+    if not fs.isOpened():
+        raise RuntimeError(f'无法打开标定结果文件: {calib_file}')
+    
+    mtx = fs.getNode("Mat_cam").mat()
+    dist = fs.getNode("dist_cam").mat()
+    img_size = tuple(fs.getNode("img_size").mat().flatten().astype(int))
+    scale = fs.getNode("scale").real()
+    proportion = fs.getNode("proportion").real()
+    proportion_scaled = fs.getNode("proportion_scaled").real()
 
-    dist_list = [[3.57574264e+00, -2.32625060e+02, -1.02493108e-02, -8.41709324e-02, 7.95046489e+03]]
-    dist = np.array(dist_list)
+    fs.release()
 
     img = frame
     img_copy = img.copy()
+
+    if img_size != img.shape[:2]:
+        raise RuntimeError(f'图像尺寸与标定结果不匹配: {img_size} vs {img.shape[:2]}')
+
     newcameramtx, roi = cv2.getOptimalNewCameraMatrix(mtx, dist, (img.shape[1], img.shape[0]), 0, (img.shape[1], img.shape[0]))
     img = cv2.undistort(img, mtx, dist, None, newcameramtx)
 
-    # enhance the contrast
-    img = cv2.convertScaleAbs(img, alpha=3, beta=0)
 
-    # 1) 去噪（可选）
     denoise = cv2.medianBlur(img, 3)
-    # 2) 黑电平压零：三个通道都很低才认为是背景
     thr = 18  # 可调：10~30
     mask_bg = np.all(denoise < thr, axis=2)   # True 表示接近黑背景
     out = denoise.copy()
@@ -123,29 +111,23 @@ if result is not None:
     # 4) 应用掩膜
     out = np.zeros_like(img)
     out[clean_mask == 255] = img[clean_mask == 255]
-    # cv2.imshow('preprocessed', out)
-    # cv2.waitKey(0)
 
-    # cv2.imshow('undistorted', img)
-    # cv2.waitKey(0)
     img = out
-    # resize 
-    img = cv2.resize(img, (int(img.shape[1]*0.5), int(img.shape[0]*0.5)), interpolation=cv2.INTER_AREA)
 
-    model = VideoParticleSegmentor()
+    img = cv2.resize(img, (0, 0), fx=scale, fy=scale)
 
-    print(time.strftime("%H:%M:%S"))
-    start = time.time()
+    model = SAM()
+    # print(time.strftime("%H:%M:%S"))
+    # start = time.time()
     model.segment(img)
     model.statistic()
     model.save_result(video_name, timestamp, frame_id, img_copy)
-    end = time.time()
-    print(time.strftime("%H:%M:%S"))
+    # end = time.time()
+    # print(time.strftime("%H:%M:%S"))
     
-    delta_time = end-start
-    print(f'delta time:{int(delta_time/60)}min {delta_time%60}s')
+    # delta_time = end-start
+    # print(f'delta time:{int(delta_time/60)}min {delta_time%60}s')
 
     send_result(client, frame_id, 'ok')
 
 client.close()
-# print("[Worker] Disconnected")

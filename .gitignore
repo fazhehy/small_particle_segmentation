@@ -4,3 +4,7 @@ data/
 results/
 .vscode/
 __pycache__/
+tmp/
+references/
+calibration/results/
+video/

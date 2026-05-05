@@ -1,6 +1,6 @@
 import glob
 import math
-
+import os
 import cv2
 import numpy as np
 
@@ -10,13 +10,14 @@ chessboard_height = 10
 chessboard_length = 5 # mm
 
 # 查看当前路径
-# import os
-# print(os.getcwd())
+import os
+print(os.getcwd())
 
 # 读取图片
 scale = 0.5
 date = 'mindvision'
 suffix = 'jpg'
+out_path = f'./calibration/results/{date}'
 images_filenames = glob.glob(f'./calibration/images/{date}/*.{suffix}')
 
 objpoints = [] # 在世界坐标系中的三维点
@@ -77,10 +78,10 @@ for filename in images_filenames:
             j = j + 1
 
         # 将角点在图像上显示
-        cv2.drawChessboardCorners(img, (chessboard_width, chessboard_height), corners, ret)
-        cv2.imshow('findCorners', img)
-        cv2.imshow('img', img_copy)
-        cv2.waitKey(0)
+        # cv2.drawChessboardCorners(img, (chessboard_width, chessboard_height), corners, ret)
+        # cv2.imshow('findCorners', img)
+        # cv2.imshow('img', img_copy)
+        # cv2.waitKey(0)
 
 # 标定
 if i == 0:
@@ -93,10 +94,13 @@ if not ret:
     raise RuntimeError('相机标定失败。')
 
 # 计算像素到物理距离比例（先去畸变，再统计每行首尾角点距离）
+map_x, map_y = cv2.initUndistortRectifyMap(mtx, dist, None, mtx, (shape[1], shape[0]), cv2.CV_32FC1)
+
 row_pixel_dist_sum = 0.0
 row_count = 0
 for corners in imgpoints:
     undist_corners = cv2.undistortPoints(corners, mtx, dist, P=mtx)
+    # undist_corners = cv2.remap(corners, map_x, map_y, interpolation=cv2.INTER_LINEAR)
     for row in range(chessboard_height):
         idx0 = row * chessboard_width
         idx1 = idx0 + chessboard_width - 1
@@ -121,31 +125,20 @@ print('dis_avg(px, scaled image):', dis_avg)
 print('proportion_scaled(mm/px, scaled image):', proportion_scaled)
 print('proportion(mm/px, original image):', proportion)
 
-# dis1 = 1.163
-# dis2 = (0.903+0.893+0.893+0.913)/4
-# proportion2 = proportion*dis1/dis2
+print("误差(cam):", ret)
 
-# print("proportion2:", proportion2)
-
-print("mtx:\n",mtx)      # 内参数矩阵
-print("dist畸变值:\n",dist   )   # 畸变系数 distortion cofficients = (k_1,k_2,p_1,p_2,k_3)
-# print(shape)
-# newcameramtx, roi = cv2.getOptimalNewCameraMatrix(mtx, dist, shape[:2], 0, shape[:2])
-
-# for filename in images_filenames:
-#     img = cv2.imread(filename)
-#     h, w = img.shape[0], img.shape[1]
-#     # 缩放
-#     if scale != 1:
-#         img = cv2.resize(img, (int(w*scale), int(h*scale)), interpolation=cv2.INTER_AREA)
-#     h, w = img.shape[0], img.shape[1]
-#     # 纠正畸变
-#     dst1 = cv2.undistort(img, mtx, dist, None, newcameramtx)
-#     mapx, mapy = cv2.initUndistortRectifyMap(mtx, dist, None, newcameramtx, (w, h), 5)
-#     dst2 = cv2.remap(img, mapx, mapy, cv2.INTER_LINEAR)
-
-#     cv2.imshow('dst1', dst1)
-#     cv2.imshow('dst2', dst2)
-#     cv2.waitKey(0)
-
-# cv2.destroyAllWindows()
+os.makedirs(out_path, exist_ok=True)
+filename = os.path.join(out_path, "calibration_result.yml")
+fw = cv2.FileStorage(filename, cv2.FILE_STORAGE_WRITE)
+fw = cv2.FileStorage(filename, cv2.FILE_STORAGE_WRITE)
+fw.write("proportion", proportion)  # 原始图像的 mm/px
+fw.write("proportion_scaled", proportion_scaled)  # 缩放后图像的 mm/px
+fw.write("scale", scale)  # 缩放比例
+fw.write("img_size", shape[:2])      # 图像尺寸
+fw.write("error_cam", ret)    # 误差
+fw.write("Mat_cam", mtx)        # 相机内参
+fw.write("dist_cam", dist)      # 畸变系数
+fw.write("map_x", map_x)            # 用于提前计算即便
+fw.write("map_y", map_y)
+fw.release()
+print("save camera parameters:", filename)
